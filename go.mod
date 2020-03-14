@@ -1,4 +1,4 @@
-module impulse
+module github.com/shanebarnes/impulse
 
 go 1.13
 
