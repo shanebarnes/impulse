@@ -44,9 +44,9 @@ func TestRequest_AddTransaction_ResponseOnly(t *testing.T) {
 
 func TestRequest_AddTransaction_X2(t *testing.T) {
 	req, _ := New(nil, "tcp://127.0.0.1:443", true)
-	assert.Nil(t, req.AddTransaction(true, "CONNECT host:port HTTP/1.1\r\n\r\n", "HTTP/1.1 200 OK\r\n\r\n"))
+	assert.Nil(t, req.AddTransaction(true, "CONNECT host:port HTTP/1.1\r\n\r\n", "HTTP/1.1 200 OK\r\n"))
 	assert.Equal(t, 1, len(req.txnPreTls))
-	assert.Nil(t, req.AddTransaction(false, "GET /index.html HTTP/1.1\r\n\r\n", "HTTP/1.1 200 OK\r\n\r\n"))
+	assert.Nil(t, req.AddTransaction(false, "GET /index.html HTTP/1.1\r\n\r\n", "HTTP/1.1 200 OK\r\n"))
 	assert.Equal(t, 1, len(req.txnPostTls))
 }
 

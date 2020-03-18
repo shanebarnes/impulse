@@ -3,6 +3,10 @@ package request
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -10,6 +14,12 @@ import (
 	"net"
 	"net/url"
 	"strings"
+
+	"github.com/grantae/certinfo"
+)
+
+const (
+	defaultBufSize = 1*1024*1024
 )
 
 type Request struct {
@@ -26,19 +36,29 @@ type Request struct {
 }
 
 type Transaction struct {
-	beforeTls bool
-	request   string
-	response  string
+	Request   string
+	Response  string
 }
 
 var protocols = map[string]int{
 	//"http": 1,
 	//"https": 1,
 	"tcp": 1,
-	//"udp": 1,
+	"udp": 1,
 }
 
 type reqOp func(*Request) error
+
+func (r *Request) ParseAndAddTransaction(beforeTls bool, jsonStr string) error {
+	txn := Transaction{}
+	err := json.Unmarshal([]byte(jsonStr), &txn)
+	if err == nil {
+		err = r.AddTransaction(beforeTls, txn.Request, txn.Response)
+	} else {
+		err = fmt.Errorf("Impulse transaction failed JSON parser: %s", err.Error())
+	}
+	return err
+}
 
 func (r *Request) AddTransaction(beforeTls bool, request, response string) error {
 	var err error
@@ -47,9 +67,9 @@ func (r *Request) AddTransaction(beforeTls bool, request, response string) error
 	} else if beforeTls == false && r.useTls == false { // Cannot make transaction after TLS if TLS is disabled
 		err = fmt.Errorf("Impulse transaction cannot be added to request: TLS is disabled")
 	} else if beforeTls {
-		r.txnPreTls = append(r.txnPreTls, Transaction{beforeTls: beforeTls, request: request, response: response})
+		r.txnPreTls = append(r.txnPreTls, Transaction{Request: request, Response: response})
 	} else {
-		r.txnPostTls = append(r.txnPostTls, Transaction{beforeTls: beforeTls, request: request, response: response})
+		r.txnPostTls = append(r.txnPostTls, Transaction{Request: request, Response: response})
 	}
 	return err
 }
@@ -154,22 +174,47 @@ func (r *Request) opPreTlsHandshake() error {
 	return err
 }
 
+func (r *Request) verifyPeerCertCb(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+	for chainNum, chain := range verifiedChains {
+		for certNum, cert := range chain {
+			text, _ := certinfo.CertificateText(cert)
+			r.logger.Printf("Chain %d, Certificate %d details:\n\n\n", chainNum+1, certNum+1)
+			r.logger.Printf("%s\n\n\n", text)
+		}
+	}
+	return nil
+}
+
 func (r *Request) opTlsHandshake() error {
 	var err error
 	prefix := "Impulse TLS Handshake"
 
 	if r.useTls {
 		r.logger.Printf("%s: handshaking with %s\n", prefix, r.host)
+		var sysRoots *x509.CertPool
+		sysRoots, err = x509.SystemCertPool()
 		config := &tls.Config{
 			InsecureSkipVerify: false,
+			RootCAs: sysRoots,
 			ServerName: r.host,
-			VerifyPeerCertificate: nil,//VerifyPeerCertCb,
+			VerifyPeerCertificate: r.verifyPeerCertCb,
 		}
 		r.conTls = tls.Client(r.conNet, config)
 
+		r.logger.Printf("%s: found %d certificates in system certificate pool\n", prefix, len(sysRoots.Subjects()))
+		rawSubjects := sysRoots.Subjects()
+		for i, rawSubject := range rawSubjects {
+			var subject pkix.RDNSequence
+			if _, err = asn1.Unmarshal(rawSubject, &subject); err == nil {
+				r.logger.Printf("%s: certificate %3d subject: %s\n", prefix, i+1, subject.String())
+			} else {
+				r.logger.Printf("%s: failed to retrieve certificate %3d subject: %s\n", prefix, i+1, err)
+			}
+		}
+
 		err = r.conTls.Handshake()
 		if err == nil {
-			r.logger.Printf("%s: completed handshaked with %s\n", prefix, r.host)
+			r.logger.Printf("%s: successfully completed handshake with %s\n", prefix, r.host)
 		} else {
 			r.logger.Printf("%s: failed to handshake with %s: %s\n", prefix, r.host, err.Error())
 		}
@@ -206,20 +251,20 @@ func (r *Request) executeTransaction(conn net.Conn, txn Transaction) error {
 	var n int
 	prefix := "Impulse Transaction"
 
-	if err == nil && len(txn.request) > 0 {
-		r.logger.Printf("%s: sending %s\n", prefix, txn.request)
-		n, err = io.WriteString(conn, txn.request)
-		r.logger.Printf("%s: sent %d of %d bytes\n", prefix, n, len(txn.request))
+	if err == nil && len(txn.Request) > 0 {
+		r.logger.Printf("%s: sending %s\n", prefix, txn.Request)
+		n, err = io.WriteString(conn, txn.Request)
+		r.logger.Printf("%s: sent %d of %d bytes\n", prefix, n, len(txn.Request))
 
 		if err == nil {
-			if n != len(txn.request) {
-				err = fmt.Errorf("Impulse transaction failed: sent %d of %d bytes", n, len(txn.request))
+			if n != len(txn.Request) {
+				err = fmt.Errorf("Impulse transaction failed: sent %d of %d bytes", n, len(txn.Request))
 			}
 		} else if err == io.EOF {
-			if n != len(txn.request) {
-				err = fmt.Errorf("Impulse transaction failed: sent %d of %d bytes", n, len(txn.request))
-			} else if txn.response != "" {
-				err = fmt.Errorf("Impulse transaction failed: received 0 of %d bytes", len(txn.response))
+			if n != len(txn.Request) {
+				err = fmt.Errorf("Impulse transaction failed: sent %d of %d bytes", n, len(txn.Request))
+			} else if txn.Response != "" {
+				err = fmt.Errorf("Impulse transaction failed: received 0 of %d bytes", len(txn.Response))
 			} else {
 				err = nil
 			}
@@ -228,26 +273,26 @@ func (r *Request) executeTransaction(conn net.Conn, txn Transaction) error {
 		}
 	}
 
-	if err == nil && len(txn.response) > 0 {
-		buf := make([]byte, len(txn.response))
+	if err == nil && len(txn.Response) > 0 {
+		bufSize := defaultBufSize
+		if len(txn.Response) > bufSize {
+			bufSize = len(txn.Response)
+		}
+		buf := make([]byte, bufSize)
 		r.logger.Printf("%s: receiving %d bytes\n", prefix, len(buf))
 		n, err = conn.Read(buf)
 		r.logger.Printf("%s: received %d of %d bytes\n", prefix, n, len(buf))
 
 		response := ""
 		if n > 0 {
-			response = string(buf)
+			response = string(buf[:n])
 			r.logger.Printf("%s: received %s\n", prefix, response)
 		}
-		if err == nil {
-			if n != len(txn.response) {
-				err = fmt.Errorf("Impulse transaction failed: received %d of %d bytes", n, len(txn.response))
-			} else if strings.Compare(txn.response, response) != 0 {
+		if err == nil || err == io.EOF {
+			if n < len(txn.Response) {
+				err = fmt.Errorf("Impulse transaction failed: received %d of %d bytes", n, len(txn.Response))
+			} else if !strings.HasPrefix(response, txn.Response) {
 				err = fmt.Errorf("Impulse transaction failed: received response does not equal expected response")
-			}
-		} else if err == io.EOF {
-			if n != len(txn.response) {
-				err = fmt.Errorf("Impulse transaction failed: received %d of %d bytes", n, len(txn.response))
 			}
 		} else {
 			err = fmt.Errorf("Impulse transaction failed on response: %s", err.Error())
