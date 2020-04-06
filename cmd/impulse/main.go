@@ -30,7 +30,7 @@ func init() {
 	}
 }
 
-func loadTransactions(impulse request.Request, beforeTls bool, txns stringSlice) {
+func loadTransactions(impulse *request.Request, beforeTls bool, txns stringSlice) {
 	for _, txn := range txns {
 		err := impulse.ParseAndAddTransaction(beforeTls, txn)
 		if err != nil {
@@ -60,8 +60,8 @@ func main() {
 		logger := log.New(os.Stdout, "", log.Ldate|log.Ltime|log.Lmicroseconds)
 		impulse, err := request.New(logger, *url, *tls)
 		if err == nil {
-			loadTransactions(impulse, true, preTxn)
-			loadTransactions(impulse, false, postTxn)
+			loadTransactions(&impulse, true, preTxn)
+			loadTransactions(&impulse, false, postTxn)
 			err = impulse.Send(nil)
 		}
 

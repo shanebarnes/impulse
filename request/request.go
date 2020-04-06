@@ -4,8 +4,8 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/asn1"
+	//"crypto/x509/pkix"
+	//"encoding/asn1"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -67,8 +67,10 @@ func (r *Request) AddTransaction(beforeTls bool, request, response string) error
 	} else if beforeTls == false && r.useTls == false { // Cannot make transaction after TLS if TLS is disabled
 		err = fmt.Errorf("Impulse transaction cannot be added to request: TLS is disabled")
 	} else if beforeTls {
+		r.logger.Printf("Adding request/response to pre-TLS transaction container\n")
 		r.txnPreTls = append(r.txnPreTls, Transaction{Request: request, Response: response})
 	} else {
+		r.logger.Printf("Adding request/response to post-TLS transaction container\n")
 		r.txnPostTls = append(r.txnPostTls, Transaction{Request: request, Response: response})
 	}
 	return err
@@ -144,6 +146,7 @@ func (r *Request) opPostTlsHandshake() error {
 	var err error
 	prefix := "Impulse Post-TLS Handshake"
 
+	r.logger.Printf("%s: executing %d transactions\n", prefix, len(r.txnPostTls))
 	for i, txn := range r.txnPostTls {
 		r.logger.Printf("%s: executing transaction %d\n", prefix, i+1)
 		if r.useTls {
@@ -163,6 +166,7 @@ func (r *Request) opPreTlsHandshake() error {
 	var err error
 	prefix := "Impulse Pre-TLS Handshake"
 
+	r.logger.Printf("%s: executing %d transactions\n", prefix, len(r.txnPreTls))
 	for i, txn := range r.txnPreTls {
 		r.logger.Printf("%s: executing transaction %d\n", prefix, i+1)
 		err = r.executeTransaction(r.conNet, txn)
@@ -202,15 +206,15 @@ func (r *Request) opTlsHandshake() error {
 		r.conTls = tls.Client(r.conNet, config)
 
 		r.logger.Printf("%s: found %d certificates in system certificate pool\n", prefix, len(sysRoots.Subjects()))
-		rawSubjects := sysRoots.Subjects()
-		for i, rawSubject := range rawSubjects {
-			var subject pkix.RDNSequence
-			if _, err = asn1.Unmarshal(rawSubject, &subject); err == nil {
-				r.logger.Printf("%s: certificate %3d subject: %s\n", prefix, i+1, subject.String())
-			} else {
-				r.logger.Printf("%s: failed to retrieve certificate %3d subject: %s\n", prefix, i+1, err)
-			}
-		}
+		//rawSubjects := sysRoots.Subjects()
+		//for i, rawSubject := range rawSubjects {
+		//	var subject pkix.RDNSequence
+		//	if _, err = asn1.Unmarshal(rawSubject, &subject); err == nil {
+		//		r.logger.Printf("%s: certificate %3d subject: %s\n", prefix, i+1, subject.String())
+		//	} else {
+		//		r.logger.Printf("%s: failed to retrieve certificate %3d subject: %s\n", prefix, i+1, err)
+		//	}
+		//}
 
 		err = r.conTls.Handshake()
 		if err == nil {
@@ -233,10 +237,10 @@ func (r *Request) Send(ctx context.Context) error { // Return response
 		(*Request).opNetShutdown,
 	}
 
-	for _, op := range ops {
-		//r.logger.Printf("Impulse Send: starting operation %d\n", i+1)
+	for i, op := range ops {
+		r.logger.Printf("Impulse Send: starting operation %d\n", i+1)
 		err = op(r)
-		//r.logger.Printf("Impulse Send: completed operation %d\n", i+1)
+		r.logger.Printf("Impulse Send: completed operation %d\n", i+1)
 		if err != nil {
 			r.opNetShutdown()
 			break
